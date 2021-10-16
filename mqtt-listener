@@ -15,6 +15,9 @@ import argparse
 import subprocess
 import configparser
 
+from copy import copy
+from types import SimpleNamespace
+
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
 
 MIN_VERSION = (3, 6)
@@ -29,7 +32,7 @@ def message_callback(client, userdata, message):  # pylint: disable=unused-argum
     """
     logging.info("Received a new message from %s: ", message.topic)
     logging.info("Payload: %s", message.payload)
-    if params.get("script"):
+    if params.script:
         logging.info("Executing: %s", params["script"])
         # Add MQTT_PAYLOAD and MQTT_TOPIC to the script environment
         env = os.environ.copy()
@@ -39,8 +42,34 @@ def message_callback(client, userdata, message):  # pylint: disable=unused-argum
     else:
         logging.info("No script to execute, use --script")
 
+class NamespaceWithUpdate(SimpleNamespace):
+    def update(self, data : dict, exclude : list = []):
+        for k, v in dict(data).items():
+            if k not in exclude:
+                setattr(self, k, v)
+
+    def __getattribute__(self, attribute):
+        try:
+            return super().__getattribute__(attribute)
+        except AttributeError:
+            if attribute.startswith("_"):
+                raise
+            else:
+                return None
 
 # Read in command-line parameters
+params_default = NamespaceWithUpdate(
+    mqtt_endpoint=None,
+    mqtt_topic=None,
+    ssl_root_ca="certificates/AmazonRootCA1.pem",
+    ssl_cert=None,
+    ssl_key=None,
+    client_id="MQTT_Listener",
+    debug=False,
+    script=None,
+)
+params = copy(params_default)
+
 # fmt: off
 parser = argparse.ArgumentParser()
 parser.add_argument("--script", dest="script", metavar="SCRIPT-NAME",
@@ -48,10 +77,11 @@ parser.add_argument("--script", dest="script", metavar="SCRIPT-NAME",
 parser.add_argument("--mqtt-endpoint", dest="mqtt_endpoint", metavar="HOST[:PORT]",
                     help="AWS IoT endpoint, either 'hostname' or 'hostname:port'")
 parser.add_argument("--mqtt-topic", dest="mqtt_topic", metavar="TOPIC",
-                    help="Targeted topic")
-parser.add_argument("--client-id", dest="client_id", default="MQTT_Listener",
-                    help="Client id")
+                    help="MQTT Topic to subscribe to")
+parser.add_argument("--client-id", dest="client_id", default=params_default.client_id,
+                    help="Client ID.")
 parser.add_argument("--ssl-root-ca", dest="ssl_root_ca", metavar="PEM-FILE",
+                    default=params_default.ssl_root_ca,
                     help="Root CA file path")
 parser.add_argument("--ssl-cert", dest="ssl_cert", metavar="PEM-FILE",
                     help="Certificate file path")
@@ -67,15 +97,30 @@ args = parser.parse_args()
 config = configparser.ConfigParser()
 config.read(args.config)
 
-params = dict(config["default"].items())
-params.update({k: v for k, v in vars(args).items() if v is not None})
+if config.sections() and config["default"]:
+    params.update(config["default"].items())
 
-endpoint, port = (params.get("mqtt_endpoint") + ":").split(":")[:2]
+# Overwrite config file values with command line args
+params.update({
+    k: v
+    for k, v in vars(args).items()
+    # don't overwrite config value with a default again
+    if v is not None and getattr(params_default, k) != v
+})
+
+missing_params = []
+for param in params_default.__dict__.keys():
+    if getattr(params, param) is None:
+        missing_params.append("--{}".format(param.replace('_', '-')))
+if missing_params:
+    parser.error("the following arguments are required: {}".format(", ".join(missing_params)))
+
+endpoint, port = (params.mqtt_endpoint + ":").split(":")[:2]
 port = int(port) if port else 8883
 
 # Configure logging
 logger = logging.getLogger("AWSIoTPythonSDK.core")
-if params.get("debug"):
+if params.debug:
     logger.setLevel(logging.DEBUG)
 else:
     logger.setLevel(logging.INFO)
@@ -85,10 +130,10 @@ streamHandler.setFormatter(formatter)
 logger.addHandler(streamHandler)
 
 # Init AWSIoTMQTTClient
-myAWSIoTMQTTClient = AWSIoTMQTTClient(params.get("client_id"))
+myAWSIoTMQTTClient = AWSIoTMQTTClient(params.client_id)
 myAWSIoTMQTTClient.configureEndpoint(endpoint, port)
 myAWSIoTMQTTClient.configureCredentials(
-    params.get("ssl_root_ca"), params.get("ssl_key"), params.get("ssl_cert")
+    params.ssl_root_ca, params.ssl_key, params.ssl_cert
 )
 
 # AWSIoTMQTTClient connection configuration
@@ -102,7 +147,7 @@ myAWSIoTMQTTClient.configureMQTTOperationTimeout(5)  # 5 sec
 
 # Connect and subscribe to AWS IoT
 myAWSIoTMQTTClient.connect()
-myAWSIoTMQTTClient.subscribe(params.get("mqtt_topic"), 1, message_callback)
+myAWSIoTMQTTClient.subscribe(params.mqtt_topic, 1, message_callback)
 
 while True:
     try:
