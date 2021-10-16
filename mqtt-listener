@@ -24,133 +24,195 @@ MIN_VERSION = (3, 6)
 if sys.version_info < MIN_VERSION:
     sys.exit("Python %s.%s or later is required." % MIN_VERSION)
 
-# Custom MQTT message callback
-def message_callback(client, userdata, message):  # pylint: disable=unused-argument
-    """
-    Execute shell script given on the command line
-    when a MQTT message is received (--script).
-    """
-    logging.info("Received a new message from %s: ", message.topic)
-    logging.info("Payload: %s", message.payload)
-    if params.script:
-        logging.info("Executing: %s", params["script"])
-        # Add MQTT_PAYLOAD and MQTT_TOPIC to the script environment
-        env = os.environ.copy()
-        env["MQTT_PAYLOAD"] = message.payload
-        env["MQTT_TOPIC"] = message.topic
-        subprocess.run(params["script"], shell=True, env=env)
-    else:
-        logging.info("No script to execute, use --script")
 
 class NamespaceWithUpdate(SimpleNamespace):
-    def update(self, data : dict, exclude : list = []):
-        for k, v in dict(data).items():
-            if k not in exclude:
-                setattr(self, k, v)
+    """
+    NamespaceWithUpdate extends SimpleNamespace with update() method
+    that accepts a dict as a parameter and updates the instance
+    attributes.
+    """
 
-    def __getattribute__(self, attribute):
+    def update(self, data: dict):
+        """
+        Add items from 'data' to the instance attributes.
+
+        Args:
+            data (dict): Dictionary with items to add.
+        """
+        for k, v in dict(data).items():
+            setattr(self, k, v)
+
+    def __getattribute__(self, attribute: str):
+        """
+        Return value of the given 'attribute'.
+
+        Overrides SimpleNamespace.__getattribute__() to return None
+        for non-existent attrinutes, as long as they don't start with "_".
+
+        Args:
+            attribute (str): Attribute name whose value to return.
+        """
         try:
             return super().__getattribute__(attribute)
         except AttributeError:
             if attribute.startswith("_"):
                 raise
-            else:
-                return None
+            return None
 
-# Read in command-line parameters
-params_default = NamespaceWithUpdate(
-    mqtt_endpoint=None,
-    mqtt_topic=None,
-    ssl_root_ca="certificates/AmazonRootCA1.pem",
-    ssl_cert=None,
-    ssl_key=None,
-    client_id="MQTT_Listener",
-    debug=False,
-    script=None,
-)
-params = copy(params_default)
 
-# fmt: off
-parser = argparse.ArgumentParser()
-parser.add_argument("--script", dest="script", metavar="SCRIPT-NAME",
-                    help="Shell script to execute")
-parser.add_argument("--mqtt-endpoint", dest="mqtt_endpoint", metavar="HOST[:PORT]",
-                    help="AWS IoT endpoint, either 'hostname' or 'hostname:port'")
-parser.add_argument("--mqtt-topic", dest="mqtt_topic", metavar="TOPIC",
-                    help="MQTT Topic to subscribe to")
-parser.add_argument("--client-id", dest="client_id", default=params_default.client_id,
-                    help="Client ID.")
-parser.add_argument("--ssl-root-ca", dest="ssl_root_ca", metavar="PEM-FILE",
-                    default=params_default.ssl_root_ca,
-                    help="Root CA file path")
-parser.add_argument("--ssl-cert", dest="ssl_cert", metavar="PEM-FILE",
-                    help="Certificate file path")
-parser.add_argument("--ssl-key", dest="ssl_key", metavar="PEM-FILE",
-                    help="Private key file path")
-parser.add_argument("--config", dest="config", metavar="CONFIG-FILE", default="config.ini",
-                    help="Config file, default: config.ini")
-parser.add_argument("--debug", dest="debug", action="store_true", default=None,
-                    help="Enable debugging output")
-args = parser.parse_args()
-# fmt: on
+def configure_logging(level=logging.INFO):
+    """
+    Configure logging level and format
 
-config = configparser.ConfigParser()
-config.read(args.config)
+    Returns:
+        logger: configured app logger
+    """
+    streamHandler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    streamHandler.setFormatter(formatter)
 
-if config.sections() and config["default"]:
-    params.update(config["default"].items())
+    # AWSIoTPythonSDK.core logger
+    iot_logger = logging.getLogger("AWSIoTPythonSDK.core")
+    iot_logger.setLevel(level)
+    iot_logger.addHandler(streamHandler)
 
-# Overwrite config file values with command line args
-params.update({
-    k: v
-    for k, v in vars(args).items()
-    # don't overwrite config value with a default again
-    if v is not None and getattr(params_default, k) != v
-})
+    # Our app logger
+    app_logger = logging.getLogger("mqtt-listener")
+    app_logger.setLevel(level)
+    app_logger.addHandler(streamHandler)
 
-missing_params = []
-for param in params_default.__dict__.keys():
-    if getattr(params, param) is None:
-        missing_params.append("--{}".format(param.replace('_', '-')))
-if missing_params:
-    parser.error("the following arguments are required: {}".format(", ".join(missing_params)))
+    return app_logger
 
-endpoint, port = (params.mqtt_endpoint + ":").split(":")[:2]
-port = int(port) if port else 8883
 
-# Configure logging
-logger = logging.getLogger("AWSIoTPythonSDK.core")
-if params.debug:
-    logger.setLevel(logging.DEBUG)
-else:
-    logger.setLevel(logging.INFO)
-streamHandler = logging.StreamHandler()
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-streamHandler.setFormatter(formatter)
-logger.addHandler(streamHandler)
+def configure_params():
+    """
+    Read config file and command line argument.
 
-# Init AWSIoTMQTTClient
-myAWSIoTMQTTClient = AWSIoTMQTTClient(params.client_id)
-myAWSIoTMQTTClient.configureEndpoint(endpoint, port)
-myAWSIoTMQTTClient.configureCredentials(
-    params.ssl_root_ca, params.ssl_key, params.ssl_cert
-)
+    Args:
+        n/a
 
-# AWSIoTMQTTClient connection configuration
-myAWSIoTMQTTClient.configureAutoReconnectBackoffTime(1, 32, 20)
-# Infinite offline Publish queueing
-myAWSIoTMQTTClient.configureOfflinePublishQueueing(-1)
+    Returns:
+        params (NamespaceWithUpdate): object with configuration parameters
+    """
+    # Read in command-line parameters
+    params_default = NamespaceWithUpdate(
+        mqtt_endpoint=None,
+        mqtt_topic=None,
+        ssl_root_ca="certificates/AmazonRootCA1.pem",
+        ssl_cert=None,
+        ssl_key=None,
+        client_id="MQTT_Listener",
+        debug=False,
+        script=None,
+    )
+    params_active = copy(params_default)
 
-myAWSIoTMQTTClient.configureDrainingFrequency(2)  # Draining: 2 Hz
-myAWSIoTMQTTClient.configureConnectDisconnectTimeout(10)  # 10 sec
-myAWSIoTMQTTClient.configureMQTTOperationTimeout(5)  # 5 sec
+    # fmt: off
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--script", dest="script", metavar="SCRIPT-NAME",
+                        help="Shell script to execute")
+    parser.add_argument("--mqtt-endpoint", dest="mqtt_endpoint", metavar="HOST[:PORT]",
+                        help="AWS IoT endpoint, either 'hostname' or 'hostname:port'")
+    parser.add_argument("--mqtt-topic", dest="mqtt_topic", metavar="TOPIC",
+                        help="MQTT Topic to subscribe to")
+    parser.add_argument("--client-id", dest="client_id", default=params_default.client_id,
+                        help="Client ID.")
+    parser.add_argument("--ssl-root-ca", dest="ssl_root_ca", metavar="PEM-FILE",
+                        default=params_default.ssl_root_ca,
+                        help="Root CA file path")
+    parser.add_argument("--ssl-cert", dest="ssl_cert", metavar="PEM-FILE",
+                        help="Certificate file path")
+    parser.add_argument("--ssl-key", dest="ssl_key", metavar="PEM-FILE",
+                        help="Private key file path")
+    parser.add_argument("--config", dest="config", metavar="CONFIG-FILE", default="config.ini",
+                        help="Config file, default: config.ini")
+    parser.add_argument("--debug", dest="debug", action="store_true", default=None,
+                        help="Enable debugging output")
+    args = parser.parse_args()
+    # fmt: on
 
-# Connect and subscribe to AWS IoT
-myAWSIoTMQTTClient.connect()
-myAWSIoTMQTTClient.subscribe(params.mqtt_topic, 1, message_callback)
+    config = configparser.ConfigParser()
+    config.read(args.config)
 
-while True:
-    try:
-        time.sleep(1)
-    except KeyboardInterrupt as e:
-        quit(0)
+    if config.sections() and config["default"]:
+        params_active.update(config["default"].items())
+
+    # Overwrite config file values with command line args
+    params_active.update(
+        {
+            k: v
+            for k, v in vars(args).items()
+            # don't overwrite config value with a default again
+            if v is not None and getattr(params_default, k) != v
+        }
+    )
+
+    missing_params = []
+    for param in params_default.__dict__:
+        logger.debug("Parameter: %s = %s", param, getattr(params_active, param))
+        if getattr(params_active, param) is None:
+            missing_params.append("--{}".format(param.replace("_", "-")))
+    if missing_params:
+        parser.error(
+            "the following arguments are required: {}".format(", ".join(missing_params))
+        )
+
+    return params_active
+
+
+def message_callback(client, userdata, message):  # pylint: disable=unused-argument
+    """
+    Execute shell script given on the command line
+    when a MQTT message is received (--script).
+    """
+    logger.info("Received a new message from %s: ", message.topic)
+    logger.info("Payload: %r", message.payload)
+    logger.info("Executing: %s", params.script)
+
+    # Add MQTT_PAYLOAD and MQTT_TOPIC to the script environment
+    env = os.environ.copy()
+    env["MQTT_PAYLOAD"] = message.payload
+    env["MQTT_TOPIC"] = message.topic
+
+    # Execute the script
+    subprocess.run(params.script, shell=True, env=env)
+
+
+if __name__ == "__main__":
+    # Pre-parse args to see if we have "--debug"
+    logging_level = logging.DEBUG if "--debug" in sys.argv else logging.INFO
+    logger = configure_logging(level=logging_level)
+
+    # Parse argments
+    params = configure_params()
+
+    endpoint, port = (params.mqtt_endpoint + ":").split(":")[:2]
+    port = int(port) if port else 8883
+
+    # Init AWSIoTMQTTClient
+    myAWSIoTMQTTClient = AWSIoTMQTTClient(params.client_id)
+    myAWSIoTMQTTClient.configureEndpoint(endpoint, port)
+    myAWSIoTMQTTClient.configureCredentials(
+        params.ssl_root_ca, params.ssl_key, params.ssl_cert
+    )
+
+    # AWSIoTMQTTClient connection configuration
+    myAWSIoTMQTTClient.configureAutoReconnectBackoffTime(1, 32, 20)
+    # Infinite offline Publish queueing
+    myAWSIoTMQTTClient.configureOfflinePublishQueueing(-1)
+
+    myAWSIoTMQTTClient.configureDrainingFrequency(2)  # Draining: 2 Hz
+    myAWSIoTMQTTClient.configureConnectDisconnectTimeout(10)  # 10 sec
+    myAWSIoTMQTTClient.configureMQTTOperationTimeout(5)  # 5 sec
+
+    # Connect and subscribe to AWS IoT
+    myAWSIoTMQTTClient.connect()
+    myAWSIoTMQTTClient.subscribe(params.mqtt_topic, 1, message_callback)
+
+    while True:
+        try:
+            time.sleep(1)
+        except KeyboardInterrupt as e:
+            quit(0)
