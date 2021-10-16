@@ -1,2 +1,4 @@
 config.ini
-certificates/*-*.pem.*
+certificates/*-*.pem*
+.*.swp
+__pycache__

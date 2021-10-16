@@ -1,34 +1,34 @@
 # AWS IoT MQTT Listener
 
-Execute a custom shell script when a MQTT message is received from *AWS IoT
-(Internet of Things) Topic*.
+Execute a custom shell script when a MQTT message is received from *AWS IoT (Internet of
+Things) Topic*.
 
-For example [AWS IoT Button](https://aws.amazon.com/iotbutton/) can be used to
-send *Single*, *Double* or *Long click* MQTT message to AWS IoT Topic and
-`mqtt-listener` can run a shell script whenever it happens.
+For example [AWS IoT Button](https://aws.amazon.com/iotbutton/) can be used to send
+*Single*, *Double* or *Long click* MQTT message to AWS IoT Topic and `mqtt-listener` can
+run a shell script whenever it happens.
 
 In the simplest case the shell script can for example display a desktop notification.
 
 ![Simple notification](screenshots/desktop-notification.png)
 
-The script can has access to the MQTT message payload and can modify its
-behaviour based on the payload. For example display a notification for IoT
-Button *Single click*, lock the screen for *Double click* and shut down the
-computer for *Long click* - kids screen time management, wink, wink :)
+The script can has access to the MQTT message payload and can modify its behaviour based
+on the payload. For example display a notification for IoT Button *Single click*, lock the
+screen for *Double click* and shut down the computer for *Long click* - kids screen time
+management, wink, wink :)
 
 ## Configuration
 
 The `mqtt-listener` is an [*AWS IoT
-Thing*](https://docs.aws.amazon.com/iot/latest/developerguide/thing-registry.html)
-in the AWS IoT terminology. That means it is a "device" (or a program in this case)
-that subscribes to a *MQTT Topic* and can publish and receive messages.
+Thing*](https://docs.aws.amazon.com/iot/latest/developerguide/thing-registry.html) in the
+AWS IoT terminology. That means it is a "device" (or a program in this case) that
+subscribes to a *MQTT Topic* and can publish and receive messages.
 
-Each *Thing*, including `mqtt-listener` needs at least a *SSL Certificate* and
-*Thing Policy* that enable it to connect to AWS IoT *Endpoint* and subscribe to
-the required MQTT *Topic*. In the next steps we're going to configure it all.
+Each *Thing*, including `mqtt-listener` needs at least a *SSL Certificate* and *Thing
+Policy* that enable it to connect to AWS IoT *Endpoint* and subscribe to the required MQTT
+*Topic*. In the next steps we're going to configure it all.
 
-All the settings can be passed on the command line or saved to `config.ini`
-file (see `config.template.ini`)
+All the settings can be passed on the command line or saved to `config.ini` file (see
+`config.template.ini`)
 
 ### Register an AWS IoT Button
 
