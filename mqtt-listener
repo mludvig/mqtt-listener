@@ -5,9 +5,10 @@ Execute a script upon AWS IoT MQTT message reception
 """
 
 # Author: Michael Ludvig @ https://aws.nz
-# Inspired by aws-iot-device-sdk-python/samples/basicPubSub/basicPubSub.py
 
 import os
+import sys
+
 import logging
 import time
 import argparse
@@ -15,6 +16,10 @@ import subprocess
 import configparser
 
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
+
+MIN_VERSION = (3, 6)
+if sys.version_info < MIN_VERSION:
+    sys.exit("Python %s.%s or later is required." % MIN_VERSION)
 
 # Custom MQTT message callback
 def message_callback(client, userdata, message):  # pylint: disable=unused-argument
